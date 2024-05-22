@@ -1,161 +1,81 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.animation as animation
+from matplotlib.animation import FuncAnimation
 
-n_points = 200
-h = 2 * np.pi / n_points
+n_cells = 50
+L = 1
+dx = L / n_cells
+
 delta_t = 0.001
-x = np.arange(0, 2 * np.pi, h)
 t_end = 2
+n_steps = int(t_end / delta_t)
 
-# 初始条件
-# u0 = np.sin(x)
-# 间断初始条件
-u0 = np.where(x < np.pi, 0, 1)
+u = np.zeros(n_cells)
+# 设定初始条件
+x = np.arange(dx / 2, L + dx / 2, dx)  # 居中点
+u = np.where(x < 0.5, 0, 1)
+# u = np.sin(2*np.pi*x)
 
+# 零阶重构
+# def get_flux(u):
+#     flux = np.zeros(n_cells + 1)
+#     for i in range(n_cells + 1):
+#         # 线性对流方程
+#         flux[i] = u[i - 1]  # flux定义在单元左侧边界
+#     return flux
 
-def phi_for_TVD(r):
-    # return 2 * r / (1 + r ** 2)
-    # return (np.abs(r)+r)/(np.abs(r)+1)
-    # return np.where(r < 0, 0, np.where(r > 1, 1, r))
-    return 0 # 一阶迎风
-def calculate_r(u):
-    u_extended = np.concatenate([u[-1:], u, u[:1]])
-    r = np.zeros_like(u)
-    for i in range(0, len(u) ):
-        r[i] = (u_extended[i] - u_extended[i - 1]) / (u_extended[i + 1] - u_extended[i] + 1e-6)
-    return r
+# 线性重构
+def get_flux(u):
+    flux = np.zeros(n_cells + 1)
+    # 计算梯度
+    gradients = np.zeros(n_cells)
+    gradients[0] = (u[0] - u[-1]) / dx  # 对于第一个单元
+    gradients[-1] = (u[-1] - u[-2]) / dx  # 对于最后一个单元
+    for i in range(1, n_cells - 1):
+        gradients[i] = (u[i] - u[i - 1]) / dx
 
-def spatial_derivative(u):
-    # 三阶迎风格式 uj-2, uj-1, uj, uj+1
-    # u_extended = np.concatenate([u[-2:], u, u[:2]])
-    # u_x = 1 / 6 / h * (u_extended[0:-4] - 6 * u_extended[1:-3] + 3 * u_extended[2:-2] + 2 * u_extended[3:-1])
-    # 二阶迎风格式 uj-2, uj-1, uj
-    u_extended = np.concatenate([u[-2:], u, u[:2]])
-    u_x = 1 / 2 / h * (u_extended[0:-4] - 4*u_extended[1:-3] + 3*u_extended[2:-2])
-    # 二阶中心差分 uj-1, uj+1
-    # u_extended = np.concatenate([u[-1:], u, u[:1]])
-    # u_x = 1 / 2 / h * (u_extended[2:] - u_extended[:-2])
-    # 五阶迎风格式
-    # u_extended = np.concatenate([u[-3:], u, u[:3]])
-    # u_x = 1 / 60 / h * (-2 * u_extended[0:-6] + 15 * u_extended[1:-5] - 60 * u_extended[2:-4] + 20 * u_extended[3:-3] + 30 * u_extended[4:-2] - 3 * u_extended[5:-1])
+    # 线性重构至单元界面
+    flux[0] = 0.5 * (u[-1] + u[0])  # 对于最左侧边界
+    flux[-1] = flux[0]  # 最右侧边界与最左侧边界相同
+    for i in range(1, n_cells):
+        u_left = u[i - 1] + gradients[i - 1] * dx / 2  # 左侧单元的右界面
+        u_right = u[i] - gradients[i] * dx / 2  # 右侧单元的左界面
+        flux[i] = 0.5 * u_left + 0.5 * u_right   # 取平均作为界面通量
+    return flux
 
-    # TVD格式
-    # u_extended = np.concatenate([u[-2:], u, u[:2]])
-    # r_j = calculate_r(u_extended[2:-2])
-    # r_j_minus_1 = calculate_r(u_extended[1:-3])
-    # phi_j = phi_for_TVD(r_j)
-    # phi_j_minus_1 = phi_for_TVD(r_j_minus_1)
-    # u_x = 1 / h * (u_extended[2:-2] - u_extended[1:-3] + 1 / 2 * phi_j * (u_extended[3:-1] - u_extended[2:-2]) + 1 / 2 * phi_j_minus_1 * (u_extended[2:-2] - u_extended[1:-3]))
-
-    # GVC格式
-    # u_extended = np.concatenate([u[-3:], u, u[:3]])
-    # abs_diff1 = np.abs(u_extended[3:-3] - u_extended[2:-4])
-    # abs_diff2 = np.abs(u_extended[4:-2] - u_extended[3:-3])
-    # u_x = np.where(
-    #     abs_diff1 <= abs_diff2,
-    #     1 / 2 / h * (u_extended[1:-5] - 4 * u_extended[2:-4] + 3 * u_extended[3:-3]),
-    #     1 / 2 / h * (u_extended[4:-2] - u_extended[2:-4])
-    # )
-
-    # WENO5
-    # u_extended = np.concatenate([u[-3:], u, u[:3]])
-    # C = np.array([1 / 10, 6 / 10, 3 / 10]).reshape(3, 1)
-    # epsilon = 1e-6
-    # 
-    # IS_j = np.zeros((3, len(u)))  # -6 为了确保所有操作都在数组界限内
-    # 
-    # IS_j[0] = 13 / 12 * (u_extended[1:-5] - 2 * u_extended[2:-4] + u_extended[3:-3]) ** 2 + 1 / 4 * (
-    #             u_extended[1:-5] - 4 * u_extended[2:-4] + 3 * u_extended[3:-3]) ** 2
-    # IS_j[1] = 13 / 12 * (u_extended[2:-4] - 2 * u_extended[3:-3] + u_extended[4:-2]) ** 2 + 1 / 4 * (
-    #             u_extended[2:-4] - u_extended[4:-2]) ** 2
-    # IS_j[2] = 13 / 12 * (u_extended[3:-3] - 2 * u_extended[4:-2] + u_extended[5:-1]) ** 2 + 1 / 4 * (
-    #             u_extended[3:-3] - 4 * u_extended[4:-2] + 3 * u_extended[5:-1]) ** 2
-    # beta_j = C / (epsilon + IS_j) ** 2
-    # omega_j = beta_j / np.sum(beta_j, axis=0)
-    # u_x_j = np.zeros((3, len(u)))
-    # u_x_j[0] = 1 / 3 * u_extended[1:-5] - 7 / 6 * u_extended[2:-4] + 11 / 6 * u_extended[3:-3]
-    # u_x_j[1] = -1 / 6 * u_extended[2:-4] + 5 / 6 * u_extended[3:-3] + 1 / 3 * u_extended[4:-2]
-    # u_x_j[2] = 1 / 3 * u_extended[3:-3] + 5 / 6 * u_extended[4:-2] - 1 / 6 * u_extended[5:-1]
-    # 
-    # IS_j_minus_1 = np.zeros((3,len(u)))
-    # IS_j_minus_1[0] = 13 / 12 * (u_extended[0:-6] - 2 * u_extended[1:-5] + u_extended[2:-4]) ** 2 + 1 / 4 * (u_extended[0:-6] - 4 * u_extended[1:-5] + 3 * u_extended[2:-4]) ** 2
-    # IS_j_minus_1[1] = 13 / 12 * (u_extended[1:-5] - 2 * u_extended[2:-4] + u_extended[3:-3]) ** 2 + 1 / 4 * (u_extended[1:-5] - u_extended[3:-3]) ** 2
-    # IS_j_minus_1[2] = 13 / 12 * (u_extended[2:-4] - 2 * u_extended[3:-3] + u_extended[4:-2]) ** 2 + 1 / 4 * (u_extended[2:-4] - 4 * u_extended[3:-3] + 3 * u_extended[4:-2]) ** 2
-    # beta_j_minus_1 = C/(epsilon + IS_j_minus_1)**2
-    # omega_j_minus_1 = beta_j_minus_1/np.sum(beta_j_minus_1, axis=0)
-    # u_x_minus_1 = np.zeros((3,len(u)))
-    # u_x_minus_1[0] = 1/3*u_extended[0:-6] -7/6 * u_extended[1:-5] +11/6* u_extended[2:-4]
-    # u_x_minus_1[1] =-1/6*u_extended[1:-5] +5/6 * u_extended[2:-4] +1/3* u_extended[3:-3]
-    # u_x_minus_1[2] =1/3*u_extended[2:-4] +5/6 * u_extended[3:-3] -1/6* u_extended[4:-2]
-    # u_x = 1/h*(omega_j[0]*u_x_j[0] + omega_j[1]*u_x_j[1] + omega_j[2]*u_x_j[2]-omega_j_minus_1[0]*u_x_minus_1[0]-omega_j_minus_1[1]*u_x_minus_1[1]-omega_j_minus_1[2]*u_x_minus_1[2])
-
-    return u_x
+def solve(u, delta_t, dx):
+    u_new = np.zeros(n_cells)
+    flux = get_flux(u)
+    for i in range(n_cells):
+        u_new[i] = u[i] - delta_t / dx * (flux[i + 1] - flux[i])  # 此处flux[i+1]相当于flux[i+1/2]
+    u = u_new
+    return u
 
 
-def RK_3(u, delta_t):
-    k1 = -1 * spatial_derivative(u)
-    u1 = u + delta_t * k1
-    k2 = -1 * spatial_derivative(u1)
-    u2 = 3 / 4 * u + 1 / 4 * (u1 + delta_t * k2)
-    k3 = -1 * spatial_derivative(u2)
-    u3 = 1 / 3 * u + 2 / 3 * (u2 + delta_t * k3)
-    return u3
+def update(frame):
+    global u
+    u = solve(u, delta_t, dx)
+    line.set_ydata(u)
+    # 画精确解
+    u_exact = np.where(x < 0.5 + frame * delta_t, 0, 1)
+    line_exact.set_ydata(u_exact)
+    return line, line_exact
 
-
-def Euler(u, delta_t):
-    return u - delta_t * spatial_derivative(u)
-
-
-def solve(u0, delta_t, t_end):
-    u = u0.copy()
-    t = 0
-    frames = []
-    l2_errors = []
-    while t < t_end:
-        # 计算数值解
-        # u = Euler(u, delta_t)
-        u = RK_3(u, delta_t)
-        frames.append(u.copy())
-        # 计算精确解 *****************************************************************************************************
-        current_time = t + delta_t
-        # exact_solution = np.sin(x - current_time)
-        # exact_solution = np.sin(2 * x-2*current_time) - np.cos(x-current_time) * 1 / 3
-        exact_solution = np.where(x < np.pi + current_time, 0, 1)
-        # 计算L2模误差
-        l2_error = np.sqrt(np.sum((u - exact_solution) ** 2) / len(x))
-        l2_errors.append(l2_error)
-        t += delta_t
-    return frames, l2_errors
-
-
-frames, l2_errors = solve(u0, delta_t, t_end)
-
+# 初始化图像
 fig, ax = plt.subplots()
-line1, = ax.plot(x, frames[0], label='Numerical Solution')  # 数值解
-line2, = ax.plot(x, np.sin(x), label='Exact Solution', linestyle='--')  # 精确解
-ax.legend(loc='upper right')
+line, = ax.plot(x, u, label='Numerical Solution')
+line_exact, = ax.plot(x, np.zeros_like(x), label='Exact Solution')
+ax.set_xlabel('x')
+ax.set_ylabel('u')
+ax.set_title('Finite Volume Method')
+ax.legend()
 
+# 设定坐标轴范围
+ax.set_xlim(0, L)
+ax.set_ylim(-0.05, 1.05)
 
-def update(frame_number):
-    frame = frames[frame_number]
-    current_time = frame_number * delta_t
-    # 更新精确解的图像*****************************************************************************************************
-    # exact_solution = np.sin(x - current_time)
-    # exact_solution = np.sin(2 * x-2*current_time) - np.cos(x-current_time) * 1 / 3
-    exact_solution = np.where(x < np.pi + current_time, 0, 1)
-    line1.set_ydata(frame)
-    line2.set_ydata(exact_solution)
-    ax.set_title(f'Time: {current_time + delta_t:.2f} seconds')
+# 创建动画
+ani = FuncAnimation(fig, update, frames=n_steps, blit=True, interval=50)
 
-    for text in ax.texts:
-        text.remove()
-    # 计算并显示L2模误差
-    l2_error = l2_errors[frame_number]
-    ax.text(0.05, 0.9, f'L2 Error: {l2_error:.6f}', transform=ax.transAxes)
-
-    return line1, line2
-
-
-ani = animation.FuncAnimation(fig, update, frames=len(frames), interval=10, repeat=False)
+# 显示动画
 plt.show()
